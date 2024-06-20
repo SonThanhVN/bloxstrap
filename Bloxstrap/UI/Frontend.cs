@@ -8,16 +8,18 @@ namespace Bloxstrap.UI
 {
     static class Frontend
     {
-        public static void ShowMenu() => new MainWindow().ShowDialog();
+        public static void ShowMenu(bool showAlreadyRunningWarning = false) => new MainWindow(showAlreadyRunningWarning).ShowDialog();
 
         public static MessageBoxResult ShowMessageBox(string message, MessageBoxImage icon = MessageBoxImage.None, MessageBoxButton buttons = MessageBoxButton.OK, MessageBoxResult defaultResult = MessageBoxResult.None)
         {
-            if (App.IsQuiet)
+            if (App.LaunchSettings.IsQuiet)
                 return defaultResult;
 
             switch (App.Settings.Prop.BootstrapperStyle)
             {
                 case BootstrapperStyle.FluentDialog:
+                case BootstrapperStyle.ClassicFluentDialog:
+                case BootstrapperStyle.FluentAeroDialog:
                 case BootstrapperStyle.ByfronDialog:
                     return Application.Current.Dispatcher.Invoke(new Func<MessageBoxResult>(() =>
                     {
@@ -55,9 +57,11 @@ namespace Bloxstrap.UI
                 BootstrapperStyle.LegacyDialog2008 => new LegacyDialog2008(),
                 BootstrapperStyle.LegacyDialog2011 => new LegacyDialog2011(),
                 BootstrapperStyle.ProgressDialog => new ProgressDialog(),
-                BootstrapperStyle.FluentDialog => new FluentDialog(),
+                BootstrapperStyle.ClassicFluentDialog => new ClassicFluentDialog(),
                 BootstrapperStyle.ByfronDialog => new ByfronDialog(),
-                _ => new FluentDialog()
+                BootstrapperStyle.FluentDialog => new FluentDialog(false),
+                BootstrapperStyle.FluentAeroDialog => new FluentDialog(true),
+                _ => new FluentDialog(false)
             };
         }
     }

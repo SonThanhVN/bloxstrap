@@ -4,6 +4,7 @@ using System.Windows.Forms;
 using Microsoft.Win32;
 
 using Bloxstrap.Integrations;
+using Bloxstrap.Resources;
 
 namespace Bloxstrap
 {
@@ -99,10 +100,6 @@ namespace Bloxstrap
 
             message = message.Replace("{product}", productName);
 
-            // yea idk
-            if (App.Settings.Prop.BootstrapperStyle == BootstrapperStyle.ByfronDialog)
-                message = message.Replace("...", "");
-
             if (Dialog is not null)
                 Dialog.Message = message;
         }
@@ -127,7 +124,7 @@ namespace Bloxstrap
 
             App.Logger.WriteLine(LOG_IDENT, "Running bootstrapper");
 
-            if (App.IsUninstall)
+            if (App.LaunchSettings.IsUninstall)
             {
                 Uninstall();
                 return;
@@ -230,9 +227,9 @@ namespace Bloxstrap
 
             await mutex.ReleaseAsync();
 
-            if (App.IsFirstRun && App.IsNoLaunch)
+            if (App.IsFirstRun && App.LaunchSettings.IsNoLaunch)
                 Dialog?.ShowSuccess(Resources.Strings.Bootstrapper_SuccessfullyInstalled);
-            else if (!App.IsNoLaunch && !_cancelFired)
+            else if (!App.LaunchSettings.IsNoLaunch && !_cancelFired)
                 await StartRoblox();
         }
 
@@ -250,35 +247,20 @@ namespace Bloxstrap
             }
             catch (HttpResponseException ex)
             {
-                if (ex.ResponseMessage.StatusCode != HttpStatusCode.NotFound)
+                if (ex.ResponseMessage.StatusCode is not HttpStatusCode.Unauthorized and not HttpStatusCode.Forbidden and not HttpStatusCode.NotFound)
                     throw;
 
-                App.Logger.WriteLine(LOG_IDENT, $"Reverting enrolled channel to {RobloxDeployment.DefaultChannel} because a {binaryType} build does not exist for {App.Settings.Prop.Channel}");
+                App.Logger.WriteLine(LOG_IDENT, $"Reverting enrolled channel to {RobloxDeployment.DefaultChannel} because HTTP {(int)ex.ResponseMessage.StatusCode}");
                 App.Settings.Prop.Channel = RobloxDeployment.DefaultChannel;
                 clientVersion = await RobloxDeployment.GetInfo(App.Settings.Prop.Channel, binaryType: binaryType);
             }
 
             if (clientVersion.IsBehindDefaultChannel)
             {
-                MessageBoxResult action = App.Settings.Prop.ChannelChangeMode switch
-                {
-                    ChannelChangeMode.Prompt => Frontend.ShowMessageBox(
-                        string.Format(Resources.Strings.Bootstrapper_ChannelOutOfDate, App.Settings.Prop.Channel, RobloxDeployment.DefaultChannel),
-                        MessageBoxImage.Warning,
-                        MessageBoxButton.YesNo
-                    ),
-                    ChannelChangeMode.Automatic => MessageBoxResult.Yes,
-                    ChannelChangeMode.Ignore => MessageBoxResult.No,
-                    _ => MessageBoxResult.None
-                };
+                App.Logger.WriteLine(LOG_IDENT, $"Changed Roblox channel from {App.Settings.Prop.Channel} to {RobloxDeployment.DefaultChannel}");
 
-                if (action == MessageBoxResult.Yes)
-                {
-                    App.Logger.WriteLine("Bootstrapper::CheckLatestVersion", $"Changed Roblox channel from {App.Settings.Prop.Channel} to {RobloxDeployment.DefaultChannel}");
-
-                    App.Settings.Prop.Channel = RobloxDeployment.DefaultChannel;
-                    clientVersion = await RobloxDeployment.GetInfo(App.Settings.Prop.Channel, binaryType: binaryType);
-                }
+                App.Settings.Prop.Channel = RobloxDeployment.DefaultChannel;
+                clientVersion = await RobloxDeployment.GetInfo(App.Settings.Prop.Channel, binaryType: binaryType);
             }
 
             _latestVersionGuid = clientVersion.VersionGuid;
@@ -292,13 +274,6 @@ namespace Bloxstrap
 
             SetStatus(Resources.Strings.Bootstrapper_Status_Starting);
 
-            if (_launchCommandLine == "--app" && App.Settings.Prop.UseDisableAppPatch)
-            {
-                Utilities.ShellExecute("https://www.roblox.com/games");
-                Dialog?.CloseBootstrapper();
-                return;
-            }
-
             if (!File.Exists(Path.Combine(Paths.System, "mfplat.dll")))
             {
                 Frontend.ShowMessageBox(
@@ -306,7 +281,7 @@ namespace Bloxstrap
                     MessageBoxImage.Error
                 );
 
-                if (!App.IsQuiet)
+                if (!App.LaunchSettings.IsQuiet)
                     Utilities.ShellExecute("https://support.microsoft.com/en-us/topic/media-feature-pack-list-for-windows-n-editions-c1c6fffa-d052-8338-7a79-a4bb980a700a");
 
                 Dialog?.CloseBootstrapper();
@@ -317,7 +292,11 @@ namespace Bloxstrap
             {
                 _launchCommandLine = _launchCommandLine.Replace("LAUNCHTIMEPLACEHOLDER", DateTimeOffset.Now.ToUnixTimeMilliseconds().ToString());
 
-                _launchCommandLine += " -channel ";
+
+                if (_launchCommandLine.StartsWith("roblox-player:1"))
+                    _launchCommandLine += "+channel:";
+                else
+                    _launchCommandLine += " -channel ";
 
                 if (App.Settings.Prop.Channel.ToLowerInvariant() == RobloxDeployment.DefaultChannel.ToLowerInvariant())
                     _launchCommandLine += "production";
@@ -371,7 +350,7 @@ namespace Bloxstrap
 
             if (App.Settings.Prop.EnableActivityTracking)
             {
-                activityWatcher = new();
+                activityWatcher = new(gameClientPid);
                 shouldWait = true;
 
                 App.NotifyIcon?.SetActivityWatcher(activityWatcher);
@@ -419,7 +398,7 @@ namespace Bloxstrap
 
             App.Logger.WriteLine(LOG_IDENT, "Waiting for Roblox to close");
 
-            while (Process.GetProcesses().Any(x => x.Id == gameClientPid))
+            while (Utilities.GetProcessesSafe().Any(x => x.Id == gameClientPid))
                 await Task.Delay(1000);
 
             App.Logger.WriteLine(LOG_IDENT, $"Roblox has exited");
@@ -538,12 +517,14 @@ namespace Bloxstrap
 
             ProtocolHandler.Register("roblox", "Roblox", Paths.Application);
             ProtocolHandler.Register("roblox-player", "Roblox", Paths.Application);
+#if STUDIO_FEATURES
             ProtocolHandler.Register("roblox-studio", "Roblox", Paths.Application);
             ProtocolHandler.Register("roblox-studio-auth", "Roblox", Paths.Application);
 
             ProtocolHandler.RegisterRobloxPlace(Paths.Application);
             ProtocolHandler.RegisterExtension(".rbxl");
             ProtocolHandler.RegisterExtension(".rbxlx");
+#endif
 
             if (Environment.ProcessPath is not null && Environment.ProcessPath != Paths.Application)
             {
@@ -577,7 +558,9 @@ namespace Bloxstrap
 
             Utility.Shortcut.Create(Paths.Application, "", Path.Combine(Paths.StartMenu, "Play Roblox.lnk"));
             Utility.Shortcut.Create(Paths.Application, "-menu", Path.Combine(Paths.StartMenu, $"{App.ProjectName} Menu.lnk"));
+#if STUDIO_FEATURES
             Utility.Shortcut.Create(Paths.Application, "-ide", Path.Combine(Paths.StartMenu, $"Roblox Studio ({App.ProjectName}).lnk"));
+#endif
 
             if (App.Settings.Prop.CreateDesktopIcon)
             {
@@ -659,7 +642,7 @@ namespace Bloxstrap
                     FileName = downloadLocation,
                 };
 
-                foreach (string arg in App.LaunchArgs)
+                foreach (string arg in App.LaunchSettings.Args)
                     startInfo.ArgumentList.Add(arg);
                 
                 App.Settings.Save();
@@ -703,15 +686,17 @@ namespace Bloxstrap
                 {
                     foreach (Process process in Process.GetProcessesByName(App.RobloxPlayerAppName))
                     {
-                        process.CloseMainWindow();
+                        process.Kill();
                         process.Close();
                     }
 
+#if STUDIO_FEATURES
                     foreach (Process process in Process.GetProcessesByName(App.RobloxStudioAppName))
                     {
-                        process.CloseMainWindow();
+                        process.Kill();
                         process.Close();
                     }
+#endif
                 }
                 catch (Exception ex)
                 {
@@ -746,6 +731,7 @@ namespace Bloxstrap
                 ProtocolHandler.Register("roblox-player", "Roblox", bootstrapperLocation);
             }
 
+#if STUDIO_FEATURES
             using RegistryKey? studioBootstrapperKey = Registry.CurrentUser.OpenSubKey(@"Software\Microsoft\Windows\CurrentVersion\Uninstall\roblox-studio");
             if (studioBootstrapperKey is null)
             {
@@ -766,6 +752,7 @@ namespace Bloxstrap
 
                 ProtocolHandler.RegisterRobloxPlace(studioLocation);
             }
+#endif
 
             // if the folder we're installed to does not end with "Bloxstrap", we're installed to a user-selected folder
             // in which case, chances are they chose to install to somewhere they didn't really mean to (prior to the added warning in 2.4.0)
@@ -842,7 +829,7 @@ namespace Bloxstrap
 
             Dialog?.ShowSuccess(Resources.Strings.Bootstrapper_SuccessfullyUninstalled, callback);
         }
-        #endregion
+#endregion
 
         #region Roblox Install
         private async Task InstallLatestVersion()
@@ -969,7 +956,11 @@ namespace Bloxstrap
             // delete any old version folders
             // we only do this if roblox isnt running just in case an update happened
             // while they were launching a second instance or something idk
+#if STUDIO_FEATURES
             if (!Process.GetProcessesByName(App.RobloxPlayerAppName).Any() && !Process.GetProcessesByName(App.RobloxStudioAppName).Any())
+#else
+            if (!Process.GetProcessesByName(App.RobloxPlayerAppName).Any())
+#endif
             {
                 foreach (DirectoryInfo dir in new DirectoryInfo(Paths.Versions).GetDirectories())
                 {
@@ -1136,8 +1127,6 @@ namespace Bloxstrap
             if (!Directory.Exists(Paths.Modifications))
                 Directory.CreateDirectory(Paths.Modifications);
 
-            bool appDisabled = App.Settings.Prop.UseDisableAppPatch && !_launchCommandLine.Contains("--deeplink");
-
             // cursors
             await CheckModPreset(App.Settings.Prop.CursorType == CursorType.From2006, new Dictionary<string, string>
             {
@@ -1166,8 +1155,7 @@ namespace Bloxstrap
             });
 
             // Mobile.rbxl
-            await CheckModPreset(appDisabled, @"ExtraContent\places\Mobile.rbxl", "");
-            await CheckModPreset(App.Settings.Prop.UseOldAvatarBackground && !appDisabled, @"ExtraContent\places\Mobile.rbxl", "OldAvatarBackground.rbxl");
+            await CheckModPreset(App.Settings.Prop.UseOldAvatarBackground, @"ExtraContent\places\Mobile.rbxl", "OldAvatarBackground.rbxl");
 
             // emoji presets are downloaded remotely from github due to how large they are
             string contentFonts = Path.Combine(Paths.Modifications, "content\\fonts");
@@ -1189,9 +1177,20 @@ namespace Bloxstrap
 
                 Directory.CreateDirectory(contentFonts);
 
-                var response = await App.HttpClient.GetAsync(App.Settings.Prop.EmojiType.GetUrl());
-                await using var fileStream = new FileStream(emojiFontLocation, FileMode.CreateNew);
-                await response.Content.CopyToAsync(fileStream);
+                try
+                {
+                    var response = await App.HttpClient.GetAsync(App.Settings.Prop.EmojiType.GetUrl());
+                    response.EnsureSuccessStatusCode();
+                    await using var fileStream = new FileStream(emojiFontLocation, FileMode.CreateNew);
+                    await response.Content.CopyToAsync(fileStream);
+                }
+                catch (HttpRequestException ex)
+                {
+                    App.Logger.WriteLine(LOG_IDENT, $"Failed to fetch emoji preset from Github");
+                    App.Logger.WriteException(LOG_IDENT, ex);
+                    Frontend.ShowMessageBox(string.Format(Strings.Bootstrapper_EmojiPresetFetchFailed, App.Settings.Prop.EmojiType), MessageBoxImage.Warning);
+                    App.Settings.Prop.EmojiType = EmojiType.Default;
+                }
             }
 
             // check custom font mod
@@ -1202,7 +1201,7 @@ namespace Bloxstrap
             if (App.IsFirstRun && App.CustomFontLocation is not null)
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(Paths.CustomFont)!);
-                File.Copy(App.CustomFontLocation, Paths.CustomFont);
+                File.Copy(App.CustomFontLocation, Paths.CustomFont, true);
             }
 
             if (File.Exists(Paths.CustomFont))
@@ -1523,6 +1522,6 @@ namespace Bloxstrap
             string extractionPath = Path.Combine(_versionFolder, _packageDirectories[package.Name], entry.FullName);
             entry.ExtractToFile(extractionPath, true);
         }
-        #endregion
+#endregion
     }
 }

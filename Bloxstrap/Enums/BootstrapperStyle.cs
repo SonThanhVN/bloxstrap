@@ -6,7 +6,9 @@
         LegacyDialog2008,
         LegacyDialog2011,
         ProgressDialog,
+        ClassicFluentDialog,
+        ByfronDialog,
         FluentDialog,
-        ByfronDialog
+        FluentAeroDialog
     }
 }

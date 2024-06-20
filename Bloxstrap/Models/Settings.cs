@@ -12,12 +12,10 @@ namespace Bloxstrap.Models
         public Theme Theme { get; set; } = Theme.Default;
         public bool CheckForUpdates { get; set; } = true;
         public bool CreateDesktopIcon { get; set; } = true;
-        public bool MultiInstanceLaunching { get; set; } = false;
-        public bool OhHeyYouFoundMe { get; set; } = false;
+        public bool ConfirmLaunches { get; set; } = false;
 
         // channel configuration
         public string Channel { get; set; } = RobloxDeployment.DefaultChannel;
-        public ChannelChangeMode ChannelChangeMode { get; set; } = ChannelChangeMode.Automatic;
 
         // integration configuration
         public bool EnableActivityTracking { get; set; } = true;
